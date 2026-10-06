@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>SNAKE</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:#080808;color:#fff;font-family:Arial,sans-serif;min-height:100vh;display:flex;justify-content:center;align-items:center}
+.wrap{width:min(96vw,620px);padding:12px}
+.start{background:#151515;border:1px solid #333;border-radius:20px;padding:24px;text-align:center}
+.start h1{margin:0 0 20px;font-size:32px}
+input{width:100%;height:50px;background:#0b0b0b;color:#fff;border:1px solid #444;border-radius:12px;padding:0 14px;font-size:17px;outline:none}
+input:focus{border-color:#35c759}
+button{border:0;border-radius:12px;color:#fff;background:#252525;cursor:pointer;font-weight:700}
+.start button{width:100%;height:50px;margin-top:12px;background:#35c759;color:#071007;font-size:16px}
+.game{display:none}
+.info{display:flex;justify-content:space-between;margin-bottom:10px;font-weight:700}
+canvas{display:block;width:100%;aspect-ratio:1;background:#101010;border:1px solid #333;border-radius:20px;touch-action:none}
+.controls{display:grid;grid-template-columns:repeat(3,72px);gap:8px;justify-content:center;margin-top:12px}
+.controls button{width:72px;height:56px;font-size:24px}
+.empty{visibility:hidden}
+.over{display:none;text-align:center;background:#151515;border:1px solid #333;border-radius:16px;padding:15px;margin-top:12px}
+.over button{height:44px;padding:0 22px;margin-top:10px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="start" id="start">
+    <h1>SNAKE</h1>
+    <input id="name" maxlength="30" autocomplete="off" placeholder="Введите имя">
+    <button id="startBtn">НАЧАТЬ</button>
+  </div>
+
+  <div class="game" id="game">
+    <div class="info">
+      <span id="player">Игрок</span>
+      <span id="score">Счёт: 0</span>
+    </div>
+    <canvas id="canvas" width="720" height="720"></canvas>
+
+    <div class="controls">
+      <button class="empty"></button>
+      <button data-dir="up">▲</button>
+      <button class="empty"></button>
+      <button data-dir="left">◀</button>
+      <button data-dir="down">▼</button>
+      <button data-dir="right">▶</button>
+    </div>
+
+    <div class="over" id="over">
+      <div>Игра окончена</div>
+      <div id="result"></div>
+      <button id="again">ИГРАТЬ СНОВА</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const TG = window.Telegram && window.Telegram.WebApp;
+  if (TG) {
+    TG.ready();
+    TG.expand();
+  }
+
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d");
+  const N = 18, CELL = 40;
+
+  let snake, apple, dir, nextDir, score, playerName;
+  let running = false, gameOver = false;
+  let timer = null;
+  let rainbow = false;
+  let snakeColor = "#35c759";
+  let lastNotified = 0;
+
+  const colors = [
+    "#ff3b30","#ff9500","#ffd60a",
+    "#34c759","#00c7be","#0a84ff","#af52de"
+  ];
+
+  function startGame() {
+    playerName = document.getElementById("name").value.trim().slice(0,30) || "Игрок";
+    document.getElementById("player").textContent = playerName;
+    document.getElementById("start").style.display = "none";
+    document.getElementById("game").style.display = "block";
+    document.getElementById("over").style.display = "none";
+
+    snake = [
+      {x:9,y:9},{x:8,y:9},{x:7,y:9},{x:6,y:9}
+    ];
+    dir = {x:1,y:0};
+    nextDir = {x:1,y:0};
+    score = 0;
+    lastNotified = 0;
+
+    // 15% шанс на живой переливающийся градиент
+    rainbow = Math.random() < 0.15;
+    snakeColor = colors[Math.floor(Math.random()*colors.length)];
+
+    placeApple();
+    updateScore();
+
+    running = true;
+    gameOver = false;
+    clearInterval(timer);
+    timer = setInterval(tick, 150);
+    draw();
+  }
+
+  function updateScore() {
+    document.getElementById("score").textContent = "Счёт: " + score;
+  }
+
+  function placeApple() {
+    do {
+      apple = {
+        x: Math.floor(Math.random()*N),
+        y: Math.floor(Math.random()*N)
+      };
+    } while (snake.some(p => p.x === apple.x && p.y === apple.y));
+  }
+
+  function changeDirection(d) {
+    if (d==="up" && dir.y!==1) nextDir={x:0,y:-1};
+    if (d==="down" && dir.y!==-1) nextDir={x:0,y:1};
+    if (d==="left" && dir.x!==1) nextDir={x:-1,y:0};
+    if (d==="right" && dir.x!==-1) nextDir={x:1,y:0};
+  }
+
+  function notifyScore() {
+    if (score > 0 && score % 20 === 0 && score !== lastNotified) {
+      lastNotified = score;
+
+      // Передаём событие боту Telegram.
+      // Бот сможет прислать админу уведомление.
+      if (TG) {
+        TG.sendData(JSON.stringify({
+          type: "snake_score",
+          name: playerName,
+          score: score
+        }));
+      }
+    }
+  }
+
+  function tick() {
+    if (!running) return;
+
+    dir = nextDir;
+    const head = snake[0];
+    const nx = head.x + dir.x;
+    const ny = head.y + dir.y;
+
+    if (
+      nx < 0 || ny < 0 || nx >= N || ny >= N ||
+      snake.some((p,i) => i > 0 && p.x === nx && p.y === ny)
+    ) {
+      endGame();
+      return;
+    }
+
+    snake.unshift({x:nx,y:ny});
+
+    if (nx === apple.x && ny === apple.y) {
+      score++;
+      updateScore();
+      placeApple();
+      notifyScore();
+
+      clearInterval(timer);
+      timer = setInterval(tick, Math.max(65,150-score*3));
+    } else {
+      snake.pop();
+    }
+
+    draw();
+  }
+
+  function drawApple() {
+    const x = apple.x*CELL + CELL/2;
+    const y = apple.y*CELL + CELL/2;
+
+    ctx.save();
+
+    ctx.fillStyle = "#d71920";
+    ctx.beginPath();
+    ctx.ellipse(x,y+2,13,15,0,0,Math.PI*2);
+    ctx.fill();
+
+    ctx.fillStyle = "#b51218";
+    ctx.beginPath();
+    ctx.ellipse(x-3,y-1,7,12,-0.35,0,Math.PI*2);
+    ctx.fill();
+
+    ctx.strokeStyle = "#654321";
+    ctx.lineWidth = 3;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(x+2,y-11);
+    ctx.lineTo(x+5,y-19);
+    ctx.stroke();
+
+    ctx.fillStyle = "#35a853";
+    ctx.beginPath();
+    ctx.ellipse(x+9,y-17,7,3,-0.45,0,Math.PI*2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  function drawSnake() {
+    const points = snake.map(p => ({
+      x:p.x*CELL+CELL/2,
+      y:p.y*CELL+CELL/2
+    }));
+
+    if (!points.length) return;
+
+    ctx.lineWidth = CELL*0.72;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    ctx.moveTo(points[points.length-1].x,points[points.length-1].y);
+
+    for (let i=points.length-2;i>=0;i--) {
+      ctx.lineTo(points[i].x,points[i].y);
+    }
+
+    if (rainbow) {
+      const shift = (Date.now()/5) % 720;
+      const gradient = ctx.createLinearGradient(-shift,0,720-shift,0);
+      const rainbowColors = [
+        "#ff3040","#ff9f0a","#ffe600","#30d158",
+        "#00d4ff","#408cff","#bf5af2","#ff2d55"
+      ];
+      rainbowColors.forEach((c,i) =>
+        gradient.addColorStop(i/(rainbowColors.length-1),c)
+      );
+      ctx.strokeStyle = gradient;
+    } else {
+      ctx.strokeStyle = snakeColor;
+    }
+
+    ctx.stroke();
+
+    const h = points[0];
+    ctx.fillStyle = rainbow ? "#fff" : snakeColor;
+    ctx.beginPath();
+    ctx.arc(h.x,h.y,CELL*0.39,0,Math.PI*2);
+    ctx.fill();
+
+    // глаза
+    ctx.fillStyle = "#111";
+    const ex=h.x+dir.x*8, ey=h.y+dir.y*8;
+    ctx.beginPath();
+    ctx.arc(ex-dir.y*5,ey+dir.x*5,3,0,Math.PI*2);
+    ctx.arc(ex+dir.y*5,ey-dir.x*5,3,0,Math.PI*2);
+    ctx.fill();
+  }
+
+  function draw() {
+    ctx.clearRect(0,0,720,720);
+    ctx.fillStyle="#101010";
+    ctx.fillRect(0,0,720,720);
+
+    drawApple();
+    drawSnake();
+
+    if (rainbow && running) {
+      requestAnimationFrame(draw);
+    }
+  }
+
+  function endGame() {
+    running=false;
+    gameOver=true;
+    clearInterval(timer);
+    document.getElementById("result").textContent =
+      playerName + " — " + score + " очков";
+    document.getElementById("over").style.display="block";
+    draw();
+
+    // Финальный результат
+    if (TG) {
+      TG.sendData(JSON.stringify({
+        type:"snake_game_over",
+        name:playerName,
+        score:score
+      }));
+    }
+  }
+
+  document.getElementById("startBtn").onclick=startGame;
+  document.getElementById("again").onclick=startGame;
+
+  document.getElementById("name").addEventListener("keydown",e=>{
+    if(e.key==="Enter") startGame();
+  });
+
+  document.querySelectorAll("[data-dir]").forEach(btn=>{
+    btn.addEventListener("pointerdown",e=>{
+      e.preventDefault();
+      changeDirection(btn.dataset.dir);
+    });
+  });
+
+  document.addEventListener("keydown",e=>{
+    const keys={
+      ArrowUp:"up",ArrowDown:"down",
+      ArrowLeft:"left",ArrowRight:"right"
+    };
+    if(keys[e.key]){
+      e.preventDefault();
+      changeDirection(keys[e.key]);
+    }
+  });
+
+  let sx=0,sy=0;
+
+  canvas.addEventListener("pointerdown",e=>{
+    sx=e.clientX;
+    sy=e.clientY;
+  });
+
+  canvas.addEventListener("pointerup",e=>{
+    const dx=e.clientX-sx;
+    const dy=e.clientY-sy;
+
+    if(Math.max(Math.abs(dx),Math.abs(dy))<18) return;
+
+    if(Math.abs(dx)>Math.abs(dy))
+      changeDirection(dx>0?"right":"left");
+    else
+      changeDirection(dy>0?"down":"up");
+  });
+})();
+</script>
+</body>
+</html>
